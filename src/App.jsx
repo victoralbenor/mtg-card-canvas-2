@@ -4,9 +4,42 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { firebaseConfig, appId } from './firebase-config.js';
-
-const SCRYFALL_AUTOCOMPLETE_URL = 'https://api.scryfall.com/cards/autocomplete?q=';
-const SCRYFALL_NAMED_URL = 'https://api.scryfall.com/cards/named?exact=';
+import {
+  SCRYFALL_AUTOCOMPLETE_URL,
+  SCRYFALL_NAMED_URL,
+  CARD_WIDTH,
+  CARD_HEIGHT,
+  STICKY_SIZE,
+  ELEMENT_GAP,
+  PLACEHOLDER_IMAGE_URL,
+  MIN_SCALE,
+  MAX_SCALE,
+  ZOOM_SENSITIVITY,
+  TOUCH_ZOOM_SENSITIVITY,
+  SAVE_DEBOUNCE_MS,
+  BULK_VALIDATION_DELAY_MS,
+  SEARCH_DEBOUNCE_MS,
+  CONTEXT_MENU_WIDTH,
+  CONTEXT_MENU_HEIGHT,
+  VIEW_MODE_CANVAS,
+  VIEW_MODE_BASKETS,
+  INTERACTION_MODE_SELECT,
+  INTERACTION_MODE_PAN,
+  STACK_OFFSET,
+  INITIAL_LANDS
+} from './constants.js';
+import { screenToWorld, checkIntersection } from './utils/coordinates.js';
+import { parseLine } from './utils/parsers.js';
+import { 
+  bringToFront, 
+  removeElement, 
+  updateStickyContent,
+  getAllUniqueTags,
+  getElementsWithTag,
+  toggleTagOnElements,
+  addTagToElements
+} from './utils/elements.js';
+import { getBasketData } from './utils/basketHelpers.js';
 
 // --- Firebase Initialization ---
 const app = initializeApp(firebaseConfig);
@@ -30,10 +63,10 @@ export default function App() {
   const [isPanning, setIsPanning] = useState(false);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
-  const [interactionMode, setInteractionMode] = useState('select'); // 'select' | 'pan'
+  const [interactionMode, setInteractionMode] = useState(INTERACTION_MODE_SELECT); // 'select' | 'pan'
 
   // View Mode State
-  const [viewMode, setViewMode] = useState('canvas'); // 'canvas' | 'baskets'
+  const [viewMode, setViewMode] = useState(VIEW_MODE_CANVAS); // 'canvas' | 'baskets'
   
   // Basket Column Modes (spread | stack)
   const [basketColumnModes, setBasketColumnModes] = useState({});
@@ -134,20 +167,17 @@ export default function App() {
         }
       } else {
         // --- INITIALIZE EMPTY BOARD ---
-        const landNames = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
-        const cardWidth = 200;
-        const gap = 20;
-        const totalWidth = (landNames.length * cardWidth) + ((landNames.length - 1) * gap);
+        const totalWidth = (INITIAL_LANDS.length * CARD_WIDTH) + ((INITIAL_LANDS.length - 1) * ELEMENT_GAP);
         
         const startX = (window.innerWidth - totalWidth) / 2;
-        const startY = (window.innerHeight - 280) / 2;
+        const startY = (window.innerHeight - CARD_HEIGHT) / 2;
 
-        const initialLands = landNames.map((name, index) => ({
+        const initialLands = INITIAL_LANDS.map((name, index) => ({
              id: crypto.randomUUID(),
              type: 'card',
              name: name,
              imageUrl: `https://api.scryfall.com/cards/named?exact=${name}&format=image&version=normal`, 
-             x: startX + (index * (cardWidth + gap)),
+             x: startX + (index * (CARD_WIDTH + ELEMENT_GAP)),
              y: startY,
              zIndex: index + 1,
              tags: [], 
@@ -172,7 +202,7 @@ export default function App() {
       try {
         const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'canvas_data', 'main_board');
         // Only saving canvas view to DB to keep it simple
-        const viewToSave = viewMode === 'canvas' ? view : savedViews.current.canvas;
+        const viewToSave = viewMode === VIEW_MODE_CANVAS ? view : savedViews.current.canvas;
         
         await setDoc(docRef, {
           elements: elements,
@@ -181,7 +211,7 @@ export default function App() {
       } catch (err) {
         console.error("Error saving board state:", err);
       }
-    }, 1000); 
+    }, SAVE_DEBOUNCE_MS); 
 
     return () => clearTimeout(saveTimer);
   }, [elements, view, viewMode, user, isInitialLoading]);
@@ -264,14 +294,6 @@ export default function App() {
   };
 
   // --- Bulk Add Logic (Standard) ---
-  const parseLine = (line) => {
-      const match = line.match(/^(\d+)[x\s]+(.+)$/i); 
-      if (match) {
-          return { count: Math.max(1, parseInt(match[1], 10)), name: match[2].trim() };
-      }
-      return { count: 1, name: line.trim() };
-  };
-
   const openBulkModal = () => {
       setBulkStage('input');
       setBulkAddText('');
@@ -309,7 +331,7 @@ export default function App() {
             updatedItems[i] = { ...item, status: 'invalid', data: null };
         }
         setValidatedItems([...updatedItems]);
-        await new Promise(r => setTimeout(r, 80));
+        await new Promise(r => setTimeout(r, BULK_VALIDATION_DELAY_MS));
     }
     setIsBulkValidating(false);
   };
@@ -325,16 +347,13 @@ export default function App() {
       });
       const count = expandedItems.length;
       const cols = Math.ceil(Math.sqrt(count));
-      const cardWidth = 200;
-      const cardHeight = 280;
-      const gap = 20;
       const centerX = (window.innerWidth / 2 - view.x) / view.scale;
       const centerY = (window.innerHeight / 2 - view.y) / view.scale;
-      const startX = centerX - ((cols * (cardWidth + gap)) / 2);
-      const startY = centerY - ((Math.ceil(count / cols) * (cardHeight + gap)) / 2);
+      const startX = centerX - ((cols * (CARD_WIDTH + ELEMENT_GAP)) / 2);
+      const startY = centerY - ((Math.ceil(count / cols) * (CARD_HEIGHT + ELEMENT_GAP)) / 2);
       expandedItems.forEach((item, i) => {
           const data = item.data;
-          let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || 'https://via.placeholder.com/488x680?text=No+Image';
+          let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || PLACEHOLDER_IMAGE_URL;
           const col = i % cols;
           const row = Math.floor(i / cols);
           newCards.push({
@@ -342,8 +361,8 @@ export default function App() {
               type: 'card',
               name: data.name,
               imageUrl: imageUrl,
-              x: startX + col * (cardWidth + gap),
-              y: startY + row * (cardHeight + gap),
+              x: startX + col * (CARD_WIDTH + ELEMENT_GAP),
+              y: startY + row * (CARD_HEIGHT + ELEMENT_GAP),
               zIndex: elements.length + i + 1,
               tags: [],
           });
@@ -368,13 +387,13 @@ export default function App() {
   const allValid = validatedItems.length > 0 && validatedItems.every(i => i.status === 'valid');
 
   // --- Tagging & Menu ---
-  const allUniqueTags = Array.from(new Set(elements.flatMap(el => el.tags || []))).sort();
+  const allUniqueTags = getAllUniqueTags(elements);
 
   const handleContextMenu = (e, elementId) => {
     e.preventDefault();
     e.stopPropagation();
-    const menuWidth = 180; 
-    const menuHeight = 200;
+    const menuWidth = CONTEXT_MENU_WIDTH; 
+    const menuHeight = CONTEXT_MENU_HEIGHT;
     let x = e.clientX;
     let y = e.clientY;
     if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth;
@@ -419,7 +438,7 @@ export default function App() {
         const minX = Math.min(...selectedElements.map(e => e.x));
         let currentY = selectedElements[0].y;
         const updated = selectedElements.map(el => {
-            const h = el.type === 'sticky' ? 200 : 280;
+            const h = el.type === 'sticky' ? STICKY_SIZE : CARD_HEIGHT;
             const n = { ...el, x: minX, y: currentY };
             currentY += h + 10;
             return n;
@@ -430,7 +449,7 @@ export default function App() {
         const minX = Math.min(...selectedElements.map(e => e.x));
         const minY = Math.min(...selectedElements.map(e => e.y));
         const baseZ = elements.length > 0 ? Math.max(...elements.map(e => e.zIndex)) + 1 : 1;
-        const updated = selectedElements.map((el, index) => ({ ...el, x: minX, y: minY + (index * 30), zIndex: baseZ + index }));
+        const updated = selectedElements.map((el, index) => ({ ...el, x: minX, y: minY + (index * STACK_OFFSET), zIndex: baseZ + index }));
         setElements([...otherElements, ...updated]);
     }
     setContextMenu(null);
@@ -438,39 +457,20 @@ export default function App() {
 
   const handleToggleTag = (tag) => {
       if (editingElementIds.size === 0) return;
-      const relevant = elements.filter(el => editingElementIds.has(el.id));
-      const count = relevant.filter(el => el.tags?.includes(tag)).length;
-      const total = relevant.length;
-      const shouldRemove = count === total;
-      setElements(prev => prev.map(el => {
-          if (editingElementIds.has(el.id)) {
-              const tags = el.tags || [];
-              if (shouldRemove) return { ...el, tags: tags.filter(t => t !== tag) };
-              if (!tags.includes(tag)) return { ...el, tags: [...tags, tag] };
-          }
-          return el;
-      }));
+      setElements(prev => toggleTagOnElements(prev, editingElementIds, tag));
   };
 
   const handleAddNewTag = () => {
       if (editingElementIds.size > 0 && tagInputValue.trim()) {
           const newTag = tagInputValue.trim();
-          setElements(prev => prev.map(el => {
-              if (editingElementIds.has(el.id)) {
-                  const tags = el.tags || [];
-                  if (!tags.includes(newTag)) return { ...el, tags: [...tags, newTag] };
-              }
-              return el;
-          }));
+          setElements(prev => addTagToElements(prev, editingElementIds, newTag));
           setTagInputValue('');
       }
   };
 
   const handleTagClick = (e, tag) => {
       e.stopPropagation();
-      const ids = new Set();
-      elements.forEach(el => { if (el.tags && el.tags.includes(tag)) ids.add(el.id); });
-      setSelectedIds(ids);
+      setSelectedIds(getElementsWithTag(elements, tag));
   };
 
   useEffect(() => {
@@ -501,23 +501,6 @@ export default function App() {
     };
   }, []);
 
-  const screenToWorld = (screenX, screenY) => {
-    return {
-      x: (screenX - view.x) / view.scale,
-      y: (screenY - view.y) / view.scale,
-    };
-  };
-
-  const checkIntersection = (box, element) => {
-    const minX = Math.min(box.startX, box.currentX);
-    const maxX = Math.max(box.startX, box.currentX);
-    const minY = Math.min(box.startY, box.currentY);
-    const maxY = Math.max(box.startY, box.currentY);
-    const width = 200;
-    const height = element.type === 'sticky' ? 200 : 280;
-    return (minX < element.x + width && maxX > element.x && minY < element.y + height && maxY > element.y);
-  };
-
   // --- Search & Add ---
   const handleSearchChange = (e) => {
     const query = e.target.value;
@@ -532,7 +515,7 @@ export default function App() {
         const data = await res.json();
         setSearchResults(data.data || []);
       } catch (err) {} finally { setIsSearching(false); }
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
   };
 
   const addCardToCanvas = async (cardName) => {
@@ -543,8 +526,8 @@ export default function App() {
       const res = await fetch(`${SCRYFALL_NAMED_URL}${encodeURIComponent(cardName)}`);
       const data = await res.json();
       if (data.object === 'error') { alert('Card not found'); return; }
-      let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || 'https://via.placeholder.com/488x680?text=No+Image';
-      const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+      let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || PLACEHOLDER_IMAGE_URL;
+      const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2, view);
       const newElement = {
         id: crypto.randomUUID(), type: 'card', name: data.name, imageUrl: imageUrl,
         x: center.x - 100, y: center.y - 140, zIndex: elements.length + 1, tags: [],
@@ -556,7 +539,7 @@ export default function App() {
   };
 
   const addStickyToCanvas = () => {
-      const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+      const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2, view);
       const newElement = {
         id: crypto.randomUUID(), type: 'sticky', content: '',
         x: center.x - 100, y: center.y - 100, zIndex: elements.length + 1,
@@ -570,7 +553,7 @@ export default function App() {
   const handleCanvasDrop = (e) => {
     e.preventDefault();
     if (e.dataTransfer.getData('text/plain') !== 'sticky-note') return;
-    const worldPos = screenToWorld(e.clientX, e.clientY);
+    const worldPos = screenToWorld(e.clientX, e.clientY, view);
     const newElement = {
       id: crypto.randomUUID(), type: 'sticky', content: '',
       x: worldPos.x - 100, y: worldPos.y - 100, zIndex: elements.length + 1,
@@ -578,17 +561,13 @@ export default function App() {
     setElements(prev => [...prev, newElement]);
     setSelectedIds(new Set([newElement.id]));
   };
-  const updateStickyContent = (id, newContent) => {
-    setElements(prev => prev.map(el => el.id === id ? { ...el, content: newContent } : el));
-  };
 
   // --- Input Handlers (Modified for Global Pan/Zoom) ---
 
   const handleWheel = (e) => {
     e.preventDefault();
-    const scaleSensitivity = 0.001;
-    const delta = -e.deltaY * scaleSensitivity;
-    const newScale = Math.min(Math.max(0.1, view.scale + delta), 5);
+    const delta = -e.deltaY * ZOOM_SENSITIVITY;
+    const newScale = Math.min(Math.max(MIN_SCALE, view.scale + delta), MAX_SCALE);
     const mouseX = e.clientX;
     const mouseY = e.clientY;
     
@@ -609,7 +588,7 @@ export default function App() {
     if (contextMenu) return; 
 
     // Pan Mode Check (Global)
-    if (interactionMode === 'pan' || e.button === 1 || (e.button === 0 && isSpacePressed)) {
+    if (interactionMode === INTERACTION_MODE_PAN || e.button === 1 || (e.button === 0 && isSpacePressed)) {
       e.preventDefault(); 
       setIsPanning(true);
       isPanningRef.current = true;
@@ -618,8 +597,8 @@ export default function App() {
     }
 
     // Canvas Selection Logic (Only in Canvas Mode)
-    if (viewMode === 'canvas' && e.button === 0) {
-        const worldPos = screenToWorld(e.clientX, e.clientY);
+    if (viewMode === VIEW_MODE_CANVAS && e.button === 0) {
+        const worldPos = screenToWorld(e.clientX, e.clientY, view);
         setIsPanning(false);
         isPanningRef.current = false;
         if (!e.shiftKey) setSelectedIds(new Set());
@@ -627,7 +606,7 @@ export default function App() {
     }
     
     // Basket Pan Logic (Implicit if clicking background in baskets)
-    if (viewMode === 'baskets' && e.button === 0) {
+    if (viewMode === VIEW_MODE_BASKETS && e.button === 0) {
         // If we didn't click a card (bubbled up), we treat it as a pan start attempt
         setIsPanning(true);
         isPanningRef.current = true;
@@ -636,7 +615,7 @@ export default function App() {
   };
 
   const handleMouseMove = (e) => {
-    const worldPos = screenToWorld(e.clientX, e.clientY);
+    const worldPos = screenToWorld(e.clientX, e.clientY, view);
 
     if (isPanning) {
       const dx = e.clientX - lastMousePos.x;
@@ -644,7 +623,7 @@ export default function App() {
       setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
       setLastMousePos({ x: e.clientX, y: e.clientY });
     } 
-    else if (isDraggingElements && viewMode === 'canvas') {
+    else if (isDraggingElements && viewMode === VIEW_MODE_CANVAS) {
       const dx = e.clientX - lastMousePos.x;
       const dy = e.clientY - lastMousePos.y;
       const worldDx = dx / view.scale;
@@ -652,7 +631,7 @@ export default function App() {
       setElements(prev => prev.map(el => selectedIds.has(el.id) ? { ...el, x: el.x + worldDx, y: el.y + worldDy } : el));
       setLastMousePos({ x: e.clientX, y: e.clientY });
     } 
-    else if (selectionBox && viewMode === 'canvas') {
+    else if (selectionBox && viewMode === VIEW_MODE_CANVAS) {
       setSelectionBox(prev => ({ ...prev, currentX: worldPos.x, currentY: worldPos.y }));
       const newSelection = new Set();
       elements.forEach(el => {
@@ -686,7 +665,7 @@ export default function App() {
       const touch = e.touches[0];
       const targetIsElement = e.target.closest('.canvas-element') || e.target.closest('.basket-card');
 
-      if (interactionMode === 'pan') {
+      if (interactionMode === INTERACTION_MODE_PAN) {
           setIsPanning(true);
           isPanningRef.current = true;
           setLastMousePos({ x: touch.clientX, y: touch.clientY });
@@ -694,16 +673,16 @@ export default function App() {
       }
       
       // Canvas Selection
-      if (viewMode === 'canvas' && interactionMode === 'select') {
+      if (viewMode === VIEW_MODE_CANVAS && interactionMode === INTERACTION_MODE_SELECT) {
           if (!targetIsElement) {
-             const worldPos = screenToWorld(touch.clientX, touch.clientY);
+             const worldPos = screenToWorld(touch.clientX, touch.clientY, view);
              setSelectedIds(new Set());
              setSelectionBox({ startX: worldPos.x, startY: worldPos.y, currentX: worldPos.x, currentY: worldPos.y });
           }
       }
       
       // Basket Pan (Background)
-      if (viewMode === 'baskets' && !targetIsElement) {
+      if (viewMode === VIEW_MODE_BASKETS && !targetIsElement) {
           setIsPanning(true);
           isPanningRef.current = true;
           setLastMousePos({ x: touch.clientX, y: touch.clientY });
@@ -718,7 +697,7 @@ export default function App() {
         const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         if (lastTouchDistance.current) {
             const delta = dist - lastTouchDistance.current;
-            const newScale = Math.min(Math.max(0.1, view.scale + (delta * 0.005)), 5);
+            const newScale = Math.min(Math.max(MIN_SCALE, view.scale + (delta * TOUCH_ZOOM_SENSITIVITY)), MAX_SCALE);
             const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
             const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
             const worldBefore = { x: (centerX - view.x) / view.scale, y: (centerY - view.y) / view.scale };
@@ -742,8 +721,8 @@ export default function App() {
   };
 
   const handleElementMouseDown = (e, id) => {
-    if (viewMode === 'baskets') return; // Canvas interactions only
-    if (interactionMode === 'pan' || isSpacePressed) return;
+    if (viewMode === VIEW_MODE_BASKETS) return; // Canvas interactions only
+    if (interactionMode === INTERACTION_MODE_PAN || isSpacePressed) return;
     if (e.button !== undefined && e.button !== 0) return;
     if (e.target.tagName.toLowerCase() === 'textarea') return;
 
@@ -768,33 +747,13 @@ export default function App() {
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
     setLastMousePos({ x: clientX, y: clientY });
-    bringToFront(id);
+    setElements(prev => bringToFront(prev, id));
   };
 
-  const bringToFront = (id) => {
-    const maxZ = Math.max(...elements.map(c => c.zIndex), 0);
-    setElements(prev => prev.map(c => c.id === id ? { ...c, zIndex: maxZ + 1 } : c));
-  };
-  const removeElement = (e, id) => {
+  const handleRemoveElement = (e, id) => {
     e.stopPropagation();
-    setElements(prev => prev.filter(c => c.id !== id));
+    setElements(prev => removeElement(prev, id));
     setSelectedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
-  };
-
-  // --- Basket Helpers ---
-  const getBasketData = () => {
-      const baskets = { 'Untagged': [] };
-      const allTags = new Set();
-      elements.forEach(el => {
-          if (el.tags && el.tags.length > 0) {
-              el.tags.forEach(tag => {
-                  allTags.add(tag);
-                  if (!baskets[tag]) baskets[tag] = [];
-                  baskets[tag].push(el);
-              });
-          } else { baskets['Untagged'].push(el); }
-      });
-      return { baskets, columns: ['Untagged', ...Array.from(allTags).sort()] };
   };
 
   const handleBasketDragStart = (e, cardId) => { e.dataTransfer.setData('cardId', cardId); e.dataTransfer.effectAllowed = 'copy'; };
@@ -835,7 +794,7 @@ export default function App() {
   const backgroundPosition = `${view.x}px ${view.y}px`;
   
   let cursorStyle = 'default';
-  if (interactionMode === 'pan' || isSpacePressed || isPanning) cursorStyle = 'grab';
+  if (interactionMode === INTERACTION_MODE_PAN || isSpacePressed || isPanning) cursorStyle = 'grab';
   if (isPanning) cursorStyle = 'grabbing'; 
 
   if (isInitialLoading) {
@@ -847,7 +806,7 @@ export default function App() {
     );
   }
 
-  const { baskets, columns } = getBasketData();
+  const { baskets, columns } = getBasketData(elements);
 
   return (
     <div 
@@ -860,15 +819,15 @@ export default function App() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onWheel={handleWheel}
-      onDragOver={viewMode === 'canvas' ? handleCanvasDragOver : undefined}
-      onDrop={viewMode === 'canvas' ? handleCanvasDrop : undefined}
+      onDragOver={viewMode === VIEW_MODE_CANVAS ? handleCanvasDragOver : undefined}
+      onDrop={viewMode === VIEW_MODE_CANVAS ? handleCanvasDrop : undefined}
       ref={canvasRef}
       onContextMenu={(e) => e.preventDefault()}
       style={{ cursor: cursorStyle }}
     >
       <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
 
-      {viewMode === 'canvas' && (
+      {viewMode === VIEW_MODE_CANVAS && (
           <div 
             className="absolute inset-0 pointer-events-none opacity-20"
             style={{
@@ -883,16 +842,16 @@ export default function App() {
       <div className="ui-layer absolute top-0 left-0 right-0 z-[9999] pointer-events-none p-4 flex flex-col items-center">
         <div className="flex gap-4 items-center w-full max-w-full md:max-w-6xl justify-start md:justify-center pointer-events-auto overflow-x-auto md:overflow-visible pb-2 md:pb-0 px-2 scrollbar-hide">
             <div className="flex items-center bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl overflow-hidden shrink-0">
-                <button onClick={() => handleSwitchView('canvas')} className={`p-3 transition-colors ${viewMode === 'canvas' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`} title="Canvas View"><Move className="w-6 h-6" /></button>
+                <button onClick={() => handleSwitchView(VIEW_MODE_CANVAS)} className={`p-3 transition-colors ${viewMode === VIEW_MODE_CANVAS ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`} title="Canvas View"><Move className="w-6 h-6" /></button>
                 <div className="w-px h-6 bg-neutral-700"></div>
-                <button onClick={() => handleSwitchView('baskets')} className={`p-3 transition-colors ${viewMode === 'baskets' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`} title="Tag Baskets View"><LayoutTemplate className="w-6 h-6" /></button>
+                <button onClick={() => handleSwitchView(VIEW_MODE_BASKETS)} className={`p-3 transition-colors ${viewMode === VIEW_MODE_BASKETS ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`} title="Tag Baskets View"><LayoutTemplate className="w-6 h-6" /></button>
             </div>
             <div className="w-px h-8 bg-neutral-700/50 mx-1 shrink-0"></div>
-            {viewMode === 'canvas' && (
+            {viewMode === VIEW_MODE_CANVAS && (
                 <div className="flex items-center bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl overflow-hidden shrink-0 animate-in fade-in duration-300">
-                    <button onClick={() => setInteractionMode('select')} className={`p-3 transition-colors ${interactionMode === 'select' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`}><MousePointer2 className="w-6 h-6" /></button>
+                    <button onClick={() => setInteractionMode(INTERACTION_MODE_SELECT)} className={`p-3 transition-colors ${interactionMode === INTERACTION_MODE_SELECT ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`}><MousePointer2 className="w-6 h-6" /></button>
                     <div className="w-px h-6 bg-neutral-700"></div>
-                    <button onClick={() => setInteractionMode('pan')} className={`p-3 transition-colors ${interactionMode === 'pan' ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`}><Hand className="w-6 h-6" /></button>
+                    <button onClick={() => setInteractionMode(INTERACTION_MODE_PAN)} className={`p-3 transition-colors ${interactionMode === INTERACTION_MODE_PAN ? 'bg-blue-600 text-white' : 'hover:bg-neutral-700 text-neutral-400'}`}><Hand className="w-6 h-6" /></button>
                 </div>
             )}
             <div className="bg-neutral-800/90 backdrop-blur border border-neutral-700 rounded-lg shadow-2xl flex relative min-w-[250px] items-center">
@@ -920,7 +879,7 @@ export default function App() {
           </div>
         </div>
         
-        {viewMode === 'canvas' && (
+        {viewMode === VIEW_MODE_CANVAS && (
             <div className="fixed bottom-6 left-6 text-xs text-neutral-500 pointer-events-none">
             {elements.length} items • {selectedIds.size} selected
             </div>
@@ -928,7 +887,7 @@ export default function App() {
       </div>
 
       {/* --- BASKET VIEW (TRANSFORMABLE) --- */}
-      {viewMode === 'baskets' && (
+      {viewMode === VIEW_MODE_BASKETS && (
           <div 
             className="absolute inset-0 z-10 overflow-hidden pointer-events-none" 
           >
@@ -1054,7 +1013,7 @@ export default function App() {
       )}
 
       {/* --- CANVAS VIEW --- */}
-      {viewMode === 'canvas' && (
+      {viewMode === VIEW_MODE_CANVAS && (
         <div 
             className="origin-top-left absolute top-0 left-0 will-change-transform canvas-element"
             style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
@@ -1087,7 +1046,7 @@ export default function App() {
                                 )}
                                 <img src={element.imageUrl} alt={element.name} className="w-full h-auto block pointer-events-none select-none rounded-xl" loading="lazy" draggable={false} />
                                 <div className={`absolute top-0 right-0 p-2 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity z-30`}>
-                                    <button onClick={(e) => removeElement(e, element.id)} onTouchStart={(e) => removeElement(e, element.id)} className="bg-red-500/80 hover:bg-red-600 text-white p-1.5 rounded-full backdrop-blur-sm shadow-lg transform hover:scale-110 transition-all"><Trash2 className="w-4 h-4" /></button>
+                                    <button onClick={(e) => handleRemoveElement(e, element.id)} onTouchStart={(e) => handleRemoveElement(e, element.id)} className="bg-red-500/80 hover:bg-red-600 text-white p-1.5 rounded-full backdrop-blur-sm shadow-lg transform hover:scale-110 transition-all"><Trash2 className="w-4 h-4" /></button>
                                 </div>
                             </div>
                         </div>
@@ -1110,9 +1069,9 @@ export default function App() {
                         >
                             <div className={`relative w-full h-full p-2 flex flex-col bg-yellow-200 text-neutral-900 shadow-lg rounded-sm transition-all duration-200 ${isSelected ? 'ring-4 ring-blue-500 shadow-[0_0_30px_rgba(253,224,71,0.6)]' : 'hover:shadow-2xl'}`}>
                                 <div className="h-6 w-full cursor-grab active:cursor-grabbing flex justify-end">
-                                    <button onClick={(e) => removeElement(e, element.id)} onTouchStart={(e) => removeElement(e, element.id)} className={`text-yellow-800 hover:text-red-600 hover:bg-yellow-300 rounded p-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><X className="w-4 h-4" /></button>
+                                    <button onClick={(e) => handleRemoveElement(e, element.id)} onTouchStart={(e) => handleRemoveElement(e, element.id)} className={`text-yellow-800 hover:text-red-600 hover:bg-yellow-300 rounded p-0.5 transition-opacity ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><X className="w-4 h-4" /></button>
                                 </div>
-                                <textarea className="flex-1 bg-transparent resize-none outline-none border-none text-lg font-medium leading-tight placeholder-yellow-800/50 cursor-text" placeholder="Write something..." value={element.content} onChange={(e) => updateStickyContent(element.id, e.target.value)} onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()} />
+                                <textarea className="flex-1 bg-transparent resize-none outline-none border-none text-lg font-medium leading-tight placeholder-yellow-800/50 cursor-text" placeholder="Write something..." value={element.content} onChange={(e) => setElements(prev => updateStickyContent(prev, element.id, e.target.value))} onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()} />
                             </div>
                         </div>
                     );
