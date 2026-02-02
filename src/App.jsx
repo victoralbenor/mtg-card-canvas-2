@@ -97,6 +97,7 @@ export default function App() {
   // Refs for State (To fix the snapshot race condition)
   const isDraggingRef = useRef(false);
   const isPanningRef = useRef(false);
+  const isEditingRef = useRef(false); // Prevent view jumps during tag editing
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -153,7 +154,7 @@ export default function App() {
       if (snapshot.exists()) {
         const data = snapshot.data();
         if (data.hasSeenHelp) setShowHelp(false);
-        if (!isDraggingRef.current && !isPanningRef.current) {
+        if (!isDraggingRef.current && !isPanningRef.current && !isEditingRef.current) {
             if (data.elements) setElements(data.elements);
             
             // Sync view only if in canvas mode, or handle complex sync. 
@@ -413,6 +414,7 @@ export default function App() {
           setEditingElementIds(idsToEdit);
           setContextMenu(null);
           setShowTagInput(true);
+          isEditingRef.current = true; // Block Firebase updates during tag editing
           setTagInputValue('');
       }
   };
@@ -485,7 +487,14 @@ export default function App() {
             e.preventDefault();
             setIsSpacePressed(true);
         }
-        if (e.key === 'Escape') setSelectedIds(new Set());
+        if (e.key === 'Escape') {
+            setSelectedIds(new Set());
+            if (showTagInput) {
+                setShowTagInput(false);
+                // Delay clearing ref to allow pending Firebase updates to settle
+                setTimeout(() => { isEditingRef.current = false; }, 500);
+            }
+        }
     };
     const handleKeyUp = (e) => {
         if (e.code === 'Space') {
@@ -603,14 +612,6 @@ export default function App() {
         isPanningRef.current = false;
         if (!e.shiftKey) setSelectedIds(new Set());
         setSelectionBox({ startX: worldPos.x, startY: worldPos.y, currentX: worldPos.x, currentY: worldPos.y });
-    }
-    
-    // Basket Pan Logic (Implicit if clicking background in baskets)
-    if (viewMode === VIEW_MODE_BASKETS && e.button === 0) {
-        // If we didn't click a card (bubbled up), we treat it as a pan start attempt
-        setIsPanning(true);
-        isPanningRef.current = true;
-        setLastMousePos({ x: e.clientX, y: e.clientY });
     }
   };
 
@@ -1127,7 +1128,7 @@ export default function App() {
                         })}
                     </div>
                  </div>
-                 <button onClick={() => setShowTagInput(false)} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-bold flex-shrink-0">Close</button>
+                 <button onClick={() => { setShowTagInput(false); setTimeout(() => { isEditingRef.current = false; }, 500); }} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg font-bold flex-shrink-0">Close</button>
              </div>
          </div>
       )}
