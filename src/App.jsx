@@ -840,13 +840,15 @@ export default function App() {
       }
       return;
     }
-    if (!isSelected) setSelectedIds(new Set([id]));
+    if (!isSelected) {
+      setSelectedIds(new Set([id]));
+      setElements(prev => bringToFront(prev, id));
+    }
     setIsDraggingElements(true);
     isDraggingRef.current = true;
     const clientX = e.clientX || (e.touches && e.touches[0].clientX);
     const clientY = e.clientY || (e.touches && e.touches[0].clientY);
     setLastMousePos({ x: clientX, y: clientY });
-    setElements(prev => bringToFront(prev, id));
   };
 
   const handleRemoveElement = (e, id) => {
