@@ -1290,8 +1290,8 @@ export default function App() {
                                 {validatedItems.map((item) => (
                                     <div key={item.id} className={`flex items-center p-2 border-b border-neutral-800 gap-2 ${item.status === 'valid' ? 'bg-green-900/20' : ''} ${item.status === 'invalid' ? 'bg-red-900/20' : ''} ${item.status === 'pending' ? 'bg-yellow-900/20' : ''}`}>
                                         <div className="flex-shrink-0">{item.status === 'valid' && <CheckCircle2 className="w-5 h-5 text-green-500" />}{item.status === 'invalid' && <AlertCircle className="w-5 h-5 text-red-500" />}{item.status === 'pending' && <Loader2 className="w-5 h-5 text-yellow-500 animate-spin" />}</div>
-                                        <input type="text" className="bg-transparent border-none outline-none flex-1 text-sm font-mono text-white" value={item.text} onChange={(e) => handleBulkItemChange(item.id, e.target.value)} />
-                                        <button onClick={() => handleRemoveBulkItem(item.id)} className="p-1.5 text-neutral-500 hover:text-red-400 hover:bg-neutral-700/50 rounded transition-colors" title="Remove item"><X className="w-4 h-4" /></button>
+                                        <input type="text" className="bg-transparent border-none outline-none flex-1 text-sm font-mono text-white" value={item.text} onChange={(e) => handleBulkItemChange(item.id, e.target.value)} disabled={isBulkValidating} />
+                                        <button onClick={() => handleRemoveBulkItem(item.id)} disabled={isBulkValidating} className="p-1.5 text-neutral-500 hover:text-red-400 hover:bg-neutral-700/50 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed" title="Remove item"><X className="w-4 h-4" /></button>
                                     </div>
                                 ))}
                             </div>
