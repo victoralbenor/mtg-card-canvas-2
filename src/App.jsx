@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Plus, Minus, Move, Loader2, Trash2, X, StickyNote, HelpCircle, MousePointer2, Hand, Download, Upload, AlertTriangle, Layers, CheckCircle2, AlertCircle, RefreshCw, Tag, ArrowRight, ArrowDown, Check, LayoutTemplate, List, AlignJustify } from 'lucide-react';
+import { Search, Plus, Minus, Move, Loader2, Trash2, X, StickyNote, HelpCircle, MousePointer2, Hand, Download, Upload, AlertTriangle, Layers, CheckCircle2, AlertCircle, RefreshCw, Tag, ArrowRight, ArrowDown, Check, LayoutTemplate, List, AlignJustify, Grid } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -410,8 +410,8 @@ export default function App() {
       const cols = Math.ceil(Math.sqrt(count));
       const centerX = (window.innerWidth / 2 - view.x) / view.scale;
       const centerY = (window.innerHeight / 2 - view.y) / view.scale;
-      const startX = centerX - ((cols * (CARD_WIDTH + ELEMENT_GAP)) / 2);
-      const startY = centerY - ((Math.ceil(count / cols) * (CARD_HEIGHT + ELEMENT_GAP)) / 2);
+      const startX = centerX - ((cols * 210) / 2);  // Tight spacing: 210px per card
+      const startY = centerY - ((Math.ceil(count / cols) * 290) / 2);  // Tight spacing: 290px per card
       expandedItems.forEach((item, i) => {
           const data = item.data;
           const scryfallId = data.id;
@@ -424,8 +424,8 @@ export default function App() {
               name: data.name,
               imageUrl: imageUrl,
               scryfallId: scryfallId,
-              x: startX + col * (CARD_WIDTH + ELEMENT_GAP),
-              y: startY + row * (CARD_HEIGHT + ELEMENT_GAP),
+              x: startX + col * 210,  // Tight spacing
+              y: startY + row * 290,  // Tight spacing
               zIndex: elements.length + i + 1,
               tags: [],
           });
@@ -514,6 +514,21 @@ export default function App() {
         const minY = Math.min(...selectedElements.map(e => e.y));
         const baseZ = elements.length > 0 ? Math.max(...elements.map(e => e.zIndex)) + 1 : 1;
         const updated = selectedElements.map((el, index) => ({ ...el, x: minX, y: minY + (index * STACK_OFFSET), zIndex: baseZ + index }));
+        setElements([...otherElements, ...updated]);
+    } else if (direction === 'square-grid') {
+        // Arrange in tight square grid (no gaps)
+        const cols = Math.ceil(Math.sqrt(selectedElements.length));
+        const minX = Math.min(...selectedElements.map(e => e.x));
+        const minY = Math.min(...selectedElements.map(e => e.y));
+        const updated = selectedElements.map((el, index) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            return {
+                ...el,
+                x: minX + (col * 210),  // Card width + small margin like side-by-side
+                y: minY + (row * 290)   // Card height + small margin
+            };
+        });
         setElements([...otherElements, ...updated]);
     }
     setContextMenu(null);
@@ -1221,6 +1236,7 @@ export default function App() {
                     <button className="w-full text-left px-4 py-2 hover:bg-neutral-700 text-white flex items-center gap-2" onClick={() => handleAlign('horizontal')}><ArrowRight className="w-4 h-4" />Side-by-Side</button>
                     <button className="w-full text-left px-4 py-2 hover:bg-neutral-700 text-white flex items-center gap-2" onClick={() => handleAlign('vertical')}><ArrowDown className="w-4 h-4" />Top-to-Bottom</button>
                     <button className="w-full text-left px-4 py-2 hover:bg-neutral-700 text-white flex items-center gap-2" onClick={() => handleAlign('stack-pile')}><Layers className="w-4 h-4" />Stack Vertically</button>
+                    <button className="w-full text-left px-4 py-2 hover:bg-neutral-700 text-white flex items-center gap-2" onClick={() => handleAlign('square-grid')}><Grid className="w-4 h-4" />Square Grid</button>
                  </>
              )}
          </div>
