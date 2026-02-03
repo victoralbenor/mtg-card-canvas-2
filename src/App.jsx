@@ -132,6 +132,7 @@ export default function App() {
   // Refs
   const canvasRef = useRef(null);
   const canvasContainerRef = useRef(null);
+  const basketContainerRef = useRef(null);
   const debounceTimer = useRef(null);
   const rafId = useRef(null);
   const zoomDebounceTimer = useRef(null);
@@ -654,8 +655,12 @@ export default function App() {
     viewRef.current = { x: newX, y: newY, scale: newScale };
     
     // Apply transform directly to DOM for instant feedback
+    const transformStr = `translate(${newX}px, ${newY}px) scale(${newScale})`;
     if (canvasContainerRef.current) {
-      canvasContainerRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${newScale})`;
+      canvasContainerRef.current.style.transform = transformStr;
+    }
+    if (basketContainerRef.current) {
+      basketContainerRef.current.style.transform = transformStr;
     }
     
     // Debounced React state update - only sync when zoom settles
@@ -703,9 +708,12 @@ export default function App() {
       };
       
       // Apply transform directly for smooth 60fps
+      const transformStr = `translate(${viewRef.current.x}px, ${viewRef.current.y}px) scale(${viewRef.current.scale})`;
       if (canvasContainerRef.current) {
-        canvasContainerRef.current.style.transform = 
-          `translate(${viewRef.current.x}px, ${viewRef.current.y}px) scale(${viewRef.current.scale})`;
+        canvasContainerRef.current.style.transform = transformStr;
+      }
+      if (basketContainerRef.current) {
+        basketContainerRef.current.style.transform = transformStr;
       }
       
       setLastMousePos({ x: e.clientX, y: e.clientY });
@@ -983,8 +991,14 @@ export default function App() {
             className="absolute inset-0 z-10 overflow-hidden pointer-events-none" 
           >
               <div
-                className="origin-top-left will-change-transform"
-                style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+                ref={basketContainerRef}
+                className="origin-top-left"
+                style={{ 
+                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                  willChange: isPanning || isDraggingElements ? 'transform' : 'auto',
+                  backfaceVisibility: 'hidden',
+                  perspective: 1000
+                }}
               >
                   <div className="pt-24 px-4 flex flex-row gap-4 items-start pb-4 pointer-events-auto">
                       {columns.map(columnTag => {
