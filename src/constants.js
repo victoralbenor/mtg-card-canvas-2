@@ -17,6 +17,10 @@ export const MAX_SCALE = 5;
 export const ZOOM_SENSITIVITY = 0.001;
 export const TOUCH_ZOOM_SENSITIVITY = 0.005;
 
+// Image Quality Thresholds (for performance optimization)
+export const IMAGE_QUALITY_SMALL_THRESHOLD = 0.5;  // Use 'small' images when scale < 0.5
+export const IMAGE_QUALITY_LARGE_THRESHOLD = 1.5;   // Use 'large' images when scale > 1.5
+
 // Timing Constants (in milliseconds)
 export const SAVE_DEBOUNCE_MS = 1000;
 export const BULK_VALIDATION_DELAY_MS = 80;

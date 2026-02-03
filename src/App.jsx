@@ -28,7 +28,7 @@ import {
   STACK_OFFSET,
   INITIAL_LANDS
 } from './constants.js';
-import { screenToWorld, checkIntersection } from './utils/coordinates.js';
+import { screenToWorld, checkIntersection, getOptimalImageQuality, getScryfallImageUrl, isElementInViewport } from './utils/coordinates.js';
 import { parseLine } from './utils/parsers.js';
 import { 
   bringToFront, 
@@ -59,6 +59,11 @@ export default function App() {
       canvas: { x: 0, y: 0, scale: 1 },
       baskets: { x: 0, y: 0, scale: 1 }
   });
+
+  // Sync viewRef with view state
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -125,7 +130,11 @@ export default function App() {
 
   // Refs
   const canvasRef = useRef(null);
+  const canvasContainerRef = useRef(null);
   const debounceTimer = useRef(null);
+  const rafId = useRef(null);
+  const zoomDebounceTimer = useRef(null);
+  const viewRef = useRef({ x: 0, y: 0, scale: 1 });
 
   // --- 1. Auth & Data Loading ---
   useEffect(() => {
@@ -354,6 +363,7 @@ export default function App() {
       const startY = centerY - ((Math.ceil(count / cols) * (CARD_HEIGHT + ELEMENT_GAP)) / 2);
       expandedItems.forEach((item, i) => {
           const data = item.data;
+          const scryfallId = data.id;
           let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || PLACEHOLDER_IMAGE_URL;
           const col = i % cols;
           const row = Math.floor(i / cols);
@@ -362,6 +372,7 @@ export default function App() {
               type: 'card',
               name: data.name,
               imageUrl: imageUrl,
+              scryfallId: scryfallId,
               x: startX + col * (CARD_WIDTH + ELEMENT_GAP),
               y: startY + row * (CARD_HEIGHT + ELEMENT_GAP),
               zIndex: elements.length + i + 1,
@@ -535,10 +546,12 @@ export default function App() {
       const res = await fetch(`${SCRYFALL_NAMED_URL}${encodeURIComponent(cardName)}`);
       const data = await res.json();
       if (data.object === 'error') { alert('Card not found'); return; }
+      const scryfallId = data.id;
       let imageUrl = data.image_uris?.normal || data.card_faces?.[0]?.image_uris?.normal || PLACEHOLDER_IMAGE_URL;
       const center = screenToWorld(window.innerWidth / 2, window.innerHeight / 2, view);
       const newElement = {
         id: crypto.randomUUID(), type: 'card', name: data.name, imageUrl: imageUrl,
+        scryfallId: scryfallId,
         x: center.x - 100, y: center.y - 140, zIndex: elements.length + 1, tags: [],
       };
       setElements((prev) => [...prev, newElement]);
@@ -576,19 +589,30 @@ export default function App() {
   const handleWheel = (e) => {
     e.preventDefault();
     const delta = -e.deltaY * ZOOM_SENSITIVITY;
-    const newScale = Math.min(Math.max(MIN_SCALE, view.scale + delta), MAX_SCALE);
+    const newScale = Math.min(Math.max(MIN_SCALE, viewRef.current.scale + delta), MAX_SCALE);
     const mouseX = e.clientX;
     const mouseY = e.clientY;
     
     // Calculate new position based on zoom point
     const worldBefore = {
-        x: (mouseX - view.x) / view.scale,
-        y: (mouseY - view.y) / view.scale
+        x: (mouseX - viewRef.current.x) / viewRef.current.scale,
+        y: (mouseY - viewRef.current.y) / viewRef.current.scale
     };
     const newX = mouseX - worldBefore.x * newScale;
     const newY = mouseY - worldBefore.y * newScale;
 
-    setView({ x: newX, y: newY, scale: newScale });
+    viewRef.current = { x: newX, y: newY, scale: newScale };
+    
+    // Apply transform directly to DOM for instant feedback
+    if (canvasContainerRef.current) {
+      canvasContainerRef.current.style.transform = `translate(${newX}px, ${newY}px) scale(${newScale})`;
+    }
+    
+    // Debounced React state update - only sync when zoom settles
+    if (zoomDebounceTimer.current) clearTimeout(zoomDebounceTimer.current);
+    zoomDebounceTimer.current = setTimeout(() => {
+      setView({ x: newX, y: newY, scale: newScale });
+    }, 100); // 100ms debounce
   };
 
   const handleMouseDown = (e) => {
@@ -616,12 +640,24 @@ export default function App() {
   };
 
   const handleMouseMove = (e) => {
-    const worldPos = screenToWorld(e.clientX, e.clientY, view);
+    const worldPos = screenToWorld(e.clientX, e.clientY, viewRef.current);
 
     if (isPanning) {
       const dx = e.clientX - lastMousePos.x;
       const dy = e.clientY - lastMousePos.y;
-      setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
+      
+      viewRef.current = { 
+        ...viewRef.current, 
+        x: viewRef.current.x + dx, 
+        y: viewRef.current.y + dy 
+      };
+      
+      // Apply transform directly for smooth 60fps
+      if (canvasContainerRef.current) {
+        canvasContainerRef.current.style.transform = 
+          `translate(${viewRef.current.x}px, ${viewRef.current.y}px) scale(${viewRef.current.scale})`;
+      }
+      
       setLastMousePos({ x: e.clientX, y: e.clientY });
     } 
     else if (isDraggingElements && viewMode === VIEW_MODE_CANVAS) {
@@ -645,6 +681,10 @@ export default function App() {
   };
 
   const handleMouseUp = () => {
+    if (isPanning || isDraggingElements) {
+      // Sync ref to state when interaction ends
+      setView(viewRef.current);
+    }
     setIsPanning(false);
     isPanningRef.current = false;
     setIsDraggingElements(false);
@@ -1016,10 +1056,21 @@ export default function App() {
       {/* --- CANVAS VIEW --- */}
       {viewMode === VIEW_MODE_CANVAS && (
         <div 
-            className="origin-top-left absolute top-0 left-0 will-change-transform canvas-element"
-            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+            ref={canvasContainerRef}
+            className="origin-top-left absolute top-0 left-0 canvas-element"
+            style={{ 
+                transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                willChange: isPanning || isDraggingElements ? 'transform' : 'auto',
+                backfaceVisibility: 'hidden',
+                perspective: 1000
+            }}
         >
             {elements.map(element => {
+                // Viewport culling - skip rendering if not visible
+                if (!isElementInViewport(element, view, window.innerWidth, window.innerHeight)) {
+                    return null;
+                }
+                
                 const isSelected = selectedIds.has(element.id);
                 if (element.type === 'card') {
                     return (
@@ -1045,7 +1096,13 @@ export default function App() {
                                         ))}
                                     </div>
                                 )}
-                                <img src={element.imageUrl} alt={element.name} className="w-full h-auto block pointer-events-none select-none rounded-xl" loading="lazy" draggable={false} />
+                                <img 
+                                    src={element.imageUrl} 
+                                    alt={element.name} 
+                                    className="w-full h-auto block pointer-events-none select-none rounded-xl" 
+                                    loading="lazy" 
+                                    draggable={false} 
+                                />
                                 <div className={`absolute top-0 right-0 p-2 ${isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity z-30`}>
                                     <button onClick={(e) => handleRemoveElement(e, element.id)} onTouchStart={(e) => handleRemoveElement(e, element.id)} className="bg-red-500/80 hover:bg-red-600 text-white p-1.5 rounded-full backdrop-blur-sm shadow-lg transform hover:scale-110 transition-all"><Trash2 className="w-4 h-4" /></button>
                                 </div>
