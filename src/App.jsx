@@ -7,6 +7,7 @@ import { firebaseConfig, appId } from './firebase-config.js';
 import {
   SCRYFALL_AUTOCOMPLETE_URL,
   SCRYFALL_NAMED_URL,
+  SCRYFALL_COLLECTION_URL,
   CARD_WIDTH,
   CARD_HEIGHT,
   STICKY_SIZE,
@@ -324,24 +325,73 @@ export default function App() {
         setValidatedItems(itemsToProcess);
         setBulkStage('results');
     }
+    
     const updatedItems = [...itemsToProcess];
-    for (let i = 0; i < updatedItems.length; i++) {
-        const item = updatedItems[i];
-        if (item.status === 'valid') continue;
-        const { name: searchName } = parseLine(item.text);
+    const itemsToValidate = updatedItems.filter(item => item.status !== 'valid');
+    
+    // Process in batches of 75 (Scryfall's limit)
+    const BATCH_SIZE = 75;
+    for (let batchStart = 0; batchStart < itemsToValidate.length; batchStart += BATCH_SIZE) {
+        const batch = itemsToValidate.slice(batchStart, batchStart + BATCH_SIZE);
+        
+        // Prepare identifiers for Scryfall collection API
+        const identifiers = batch.map(item => {
+            const { name: searchName } = parseLine(item.text);
+            return { name: searchName };
+        });
+        
         try {
-            const res = await fetch(`${SCRYFALL_NAMED_URL}${encodeURIComponent(searchName)}`);
+            const res = await fetch(SCRYFALL_COLLECTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ identifiers })
+            });
+            
             if (res.ok) {
-                const data = await res.json();
-                updatedItems[i] = { ...item, status: 'valid', data: data };
+                const result = await res.json();
+                const foundCards = result.data || [];
+                const notFoundList = result.not_found || [];
+                
+                // Create a map of found cards by name (case-insensitive)
+                const cardMap = new Map();
+                foundCards.forEach(card => {
+                    cardMap.set(card.name.toLowerCase(), card);
+                });
+                
+                // Update items based on results
+                batch.forEach((item, idx) => {
+                    const { name: searchName } = parseLine(item.text);
+                    const originalIndex = updatedItems.findIndex(u => u.id === item.id);
+                    
+                    const foundCard = cardMap.get(searchName.toLowerCase());
+                    if (foundCard) {
+                        updatedItems[originalIndex] = { ...item, status: 'valid', data: foundCard };
+                    } else {
+                        updatedItems[originalIndex] = { ...item, status: 'invalid', data: null };
+                    }
+                });
             } else {
-                updatedItems[i] = { ...item, status: 'invalid', data: null };
+                // If batch request fails, mark all as invalid
+                batch.forEach(item => {
+                    const originalIndex = updatedItems.findIndex(u => u.id === item.id);
+                    updatedItems[originalIndex] = { ...item, status: 'invalid', data: null };
+                });
             }
         } catch (e) {
-            updatedItems[i] = { ...item, status: 'invalid', data: null };
+            // If batch request fails, mark all as invalid
+            batch.forEach(item => {
+                const originalIndex = updatedItems.findIndex(u => u.id === item.id);
+                updatedItems[originalIndex] = { ...item, status: 'invalid', data: null };
+            });
         }
+        
+        // Update UI after each batch
         setValidatedItems([...updatedItems]);
-        await new Promise(r => setTimeout(r, BULK_VALIDATION_DELAY_MS));
+        
+        // Small delay between batches to respect rate limits
+        if (batchStart + BATCH_SIZE < itemsToValidate.length) {
+            await new Promise(r => setTimeout(r, 100));
+        }
     }
     setIsBulkValidating(false);
   };

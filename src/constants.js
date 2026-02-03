@@ -1,6 +1,7 @@
 // API Configuration
 export const SCRYFALL_AUTOCOMPLETE_URL = 'https://api.scryfall.com/cards/autocomplete?q=';
 export const SCRYFALL_NAMED_URL = 'https://api.scryfall.com/cards/named?exact=';
+export const SCRYFALL_COLLECTION_URL = 'https://api.scryfall.com/cards/collection';
 
 // Element Dimensions
 export const CARD_WIDTH = 200;
