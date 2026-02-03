@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: '/mtg-card-canvas/',
+  base: '/mtg-card-canvas-2/',
   server: {
     port: 5174
   }
